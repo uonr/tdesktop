@@ -84,6 +84,14 @@ base::options::option<int> OptionStickerSize({
 	return QColor(red, green, blue, result.alpha());
 }
 
+[[nodiscard]] bool IsBlockedSender(not_null<Element*> parent) {
+	const auto from = parent->data()->from();
+	const auto peerId = from ? from->id : PeerId(0);
+	const auto user = parent->history()->session().data().peerLoaded(peerId);
+	return GetEnhancedBool("blocked_user_spoiler_mode")
+		&& (blockExist(peerId.value) || (user && user->isBlocked()));
+}
+
 } // namespace
 
 Sticker::Sticker(
@@ -153,6 +161,11 @@ bool Sticker::webpagePart() const {
 	return _webpagePart;
 }
 
+QString Sticker::blockedEmojiText() const {
+	const auto sticker = _data->sticker();
+	return (sticker && IsBlockedSender(_parent)) ? sticker->alt : QString();
+}
+
 void Sticker::initSize(int customSize) {
 	if (customSize > 0) {
 		const auto original = Size(_data);
@@ -160,6 +173,8 @@ void Sticker::initSize(int customSize) {
 		_size = original.isEmpty()
 			? proposed
 			: DownscaledSize(original, proposed);
+	} else if (const auto emoji = blockedEmojiText(); !emoji.isEmpty()) {
+		_size = QSize(st::msgFont->width(emoji), st::msgFont->height);
 	} else if (emojiSticker() || _diceIndex >= 0) {
 		_size = EmojiSize();
 		if (_diceIndex > 0) {
@@ -169,12 +184,6 @@ void Sticker::initSize(int customSize) {
 		_size = Size(_data);
 	}
 	_size = DownscaledSize(_size, Size());
-	
-	auto peerId = _parent->data()->from() ? _parent->data()->from()->id : PeerId(0);
-	auto user = _parent->history()->session().data().peerLoaded(_parent->data()->from() ? _parent->data()->from()->id : PeerId(0));
-	if ((GetEnhancedBool("blocked_user_spoiler_mode") && blockExist(peerId.value)) || (GetEnhancedBool("blocked_user_spoiler_mode") && user && user->isBlocked())) {
-		_size = DownscaledSize(_data->dimensions, {128,kMaxSizeFixed});
-	}
 }
 
 QSize Sticker::countOptimalSize() {
@@ -248,6 +257,14 @@ void Sticker::draw(
 		const QRect &r) {
 	if (!customEmojiPart()) {
 		_parent->clearCustomEmojiRepaint();
+	}
+
+	if (const auto emoji = blockedEmojiText(); !emoji.isEmpty()) {
+		const auto stm = context.messageStyle();
+		p.setFont(st::msgFont);
+		p.setPen(stm->historyTextFg);
+		p.drawText(r, emoji, style::al_center);
+		return;
 	}
 
 	ensureDataMediaCreated();

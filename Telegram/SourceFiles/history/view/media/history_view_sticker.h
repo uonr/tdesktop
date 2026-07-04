@@ -104,6 +104,7 @@ private:
 	[[nodiscard]] bool customEmojiPart() const;
 	[[nodiscard]] bool emojiSticker() const;
 	[[nodiscard]] bool webpagePart() const;
+	[[nodiscard]] QString blockedEmojiText() const;
 	void paintAnimationFrame(
 		Painter &p,
 		const PaintContext &context,
