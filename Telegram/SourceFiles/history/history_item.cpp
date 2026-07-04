@@ -16,6 +16,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_message.h"
 #include "history/view/history_view_service_message.h"
 #include "history/view/media/history_view_media_grouped.h"
+#include "history/history_block_words.h"
 #include "history/history_item_components.h"
 #include "history/history_item_helpers.h"
 #include "history/history_unread_things.h"
@@ -371,8 +372,12 @@ std::unique_ptr<Data::Media> HistoryItem::CreateMedia(
 			return nullptr;
 		});
 	}, [&](const MTPDmessageMediaWebPage &media)  -> Result {
-		if ((GetEnhancedBool("blocked_user_spoiler_mode") && blockExist(item->author()->id.value)) ||
-			(GetEnhancedBool("blocked_user_spoiler_mode") && item->author() && item->author()->isBlocked())) {
+		if (IsBlockWordMessage(item->getOriginalMessage().text)
+			|| (GetEnhancedBool("blocked_user_spoiler_mode")
+				&& blockExist(item->author()->id.value))
+			|| (GetEnhancedBool("blocked_user_spoiler_mode")
+				&& item->author()
+				&& item->author()->isBlocked())) {
 			return nullptr;
 		}
 		using Flag = MediaWebPageFlag;
@@ -517,60 +522,49 @@ HistoryItem::HistoryItem(
 		setReactions(data.vreactions());
 		applyTTL(data);
 	} else {
-		auto peerId = data.vfrom_id() ? peerFromMTP(*data.vfrom_id()) : PeerId(0);
-		auto user = history->session().data().peerLoaded(peerId);
-		auto isBlocked = false;
+		const auto peerId = data.vfrom_id()
+			? peerFromMTP(*data.vfrom_id())
+			: PeerId(0);
+		const auto user = history->session().data().peerLoaded(peerId);
+		const auto messageText = qs(data.vmessage());
+		const auto hiddenByBlockedUser = GetEnhancedBool("blocked_user_spoiler_mode")
+			&& (blockExist(peerId.value) || (user && user->isBlocked()));
+		const auto hiddenByKeyword = IsBlockWordMessage(messageText);
+		const auto hiddenMessage = hiddenByBlockedUser || hiddenByKeyword;
+		const auto textWithEntities = TextWithEntities{
+			messageText,
+			Api::EntitiesFromMTP(
+				&history->session(),
+				data.ventities().value_or_empty())
+		};
 
-		if ((GetEnhancedBool("blocked_user_spoiler_mode") && blockExist(peerId.value)) ||
-			(GetEnhancedBool("blocked_user_spoiler_mode") && user && user->isBlocked())) {
-			isBlocked = true;
+		if (GetEnhancedBool("blocked_user_spoiler_mode") || hiddenByKeyword) {
+			const auto blkMsg = Lang::GetOriginalValue(
+				tr::lng_blocked_user_hint.base);
+			_blockMsg = TextWithEntities{
+				blkMsg + messageText,
+				Api::EntitiesFromMTP(
+					&history->session(),
+					data.ventities().value_or_empty(),
+					blkMsg.length(),
+					messageText.length())
+			};
+			_originalMsg = textWithEntities;
 		}
 
 		if (const auto media = data.vmedia()) {
 			setMedia(*media);
 		}
 
-		createComponents(data, isBlocked);
+		createComponents(data, hiddenMessage);
 
 		if (const auto richMessage = data.vrich_message()) {
 			const auto richPage = Iv::ParseRichPage(&history->session(), *richMessage);
 			setRichPage(richPage);
 			setText(Iv::FlattenRichPageSummary(richPage));
 		} else {
-			auto textWithEntities = TextWithEntities();
-			
-			auto blkMsg = Lang::GetOriginalValue(tr::lng_blocked_user_hint.base);
-			auto msg = blkMsg + qs(data.vmessage());
-
-			if (GetEnhancedBool("blocked_user_spoiler_mode")) {
-				_blockMsg = TextWithEntities{
-						msg,
-						Api::EntitiesFromMTP(
-								&history->session(),
-								data.ventities().value_or_empty(),
-								blkMsg.length(), qs(data.vmessage()).length())
-				};
-
-				_originalMsg = TextWithEntities{
-						qs(data.vmessage()),
-						Api::EntitiesFromMTP(
-								&history->session(),
-								data.ventities().value_or_empty())
-				};
-			}
-
-			if ((GetEnhancedBool("blocked_user_spoiler_mode") && blockExist(peerId.value)) || (GetEnhancedBool("blocked_user_spoiler_mode") && user && user->isBlocked())) {
-				textWithEntities = _blockMsg;
-			} else {
-				textWithEntities = TextWithEntities{
-						qs(data.vmessage()),
-						Api::EntitiesFromMTP(
-								&history->session(),
-								data.ventities().value_or_empty())
-				};
-			}
-
-			setText(_media ? textWithEntities : EnsureNonEmpty(textWithEntities));
+			const auto &text = hiddenMessage ? _blockMsg : textWithEntities;
+			setText(_media ? text : EnsureNonEmpty(text));
 		}
 
 		if (const auto groupedId = data.vgrouped_id()) {

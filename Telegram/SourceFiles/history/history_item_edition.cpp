@@ -10,7 +10,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_text_entities.h"
 #include "data/data_session.h"
 #include "data/data_user.h"
+#include "history/history_block_words.h"
 #include "iv/iv_rich_page.h"
+#include "lang/lang_keys.h"
 #include "main/main_session.h"
 
 HistoryMessageEdition::HistoryMessageEdition(
@@ -22,22 +24,28 @@ HistoryMessageEdition::HistoryMessageEdition(
 	repeatPeriod = message.vschedule_repeat_period().value_or_empty();
 	editDate = message.vedit_date().value_or(-1);
 
-	auto peerId = message.vfrom_id() ? peerFromMTP(*message.vfrom_id()) : PeerId(0);
-	auto user = session->data().peerLoaded(message.vfrom_id() ? peerFromMTP(*message.vfrom_id()) : PeerId(0));
-	if ((GetEnhancedBool("blocked_user_spoiler_mode") && blockExist(peerId.value)) || (GetEnhancedBool("blocked_user_spoiler_mode") && user && user->isBlocked())) {
-		auto blkMsg = QString("[Blocked User Message]\n");
-		auto msg = blkMsg + qs(message.vmessage());
+	const auto peerId = message.vfrom_id()
+		? peerFromMTP(*message.vfrom_id())
+		: PeerId(0);
+	const auto user = session->data().peerLoaded(peerId);
+	const auto messageText = qs(message.vmessage());
+	const auto hiddenByBlockedUser = GetEnhancedBool("blocked_user_spoiler_mode")
+		&& (blockExist(peerId.value) || (user && user->isBlocked()));
+	const auto hiddenByKeyword = IsBlockWordMessage(messageText);
+	if (hiddenByBlockedUser || hiddenByKeyword) {
+		const auto blkMsg = Lang::GetOriginalValue(
+			tr::lng_blocked_user_hint.base);
 		textWithEntities = TextWithEntities{
-			msg,
+			blkMsg + messageText,
 			Api::EntitiesFromMTP(
 				session,
 				message.ventities().value_or_empty(),
-				blkMsg.length(), qs(message.vmessage()).length())
+				blkMsg.length(),
+				messageText.length())
 		};
-	}
-	else {
+	} else {
 		textWithEntities = TextWithEntities{
-			qs(message.vmessage()),
+			messageText,
 			Api::EntitiesFromMTP(
 				session,
 				message.ventities().value_or_empty())
